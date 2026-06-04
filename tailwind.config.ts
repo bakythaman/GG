@@ -32,7 +32,7 @@ const config: Config = {
         soft: "0 24px 70px rgba(23, 21, 19, 0.12)"
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)", "Inter", "system-ui", "sans-serif"]
+        sans: ["Inter", "Manrope", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"]
       }
     }
   },
