@@ -1,4 +1,12 @@
-export type Role = "admin" | "manager" | "designer" | "foreman" | "accountant" | "client";
+export type Role =
+  | "director"
+  | "admin"
+  | "manager"
+  | "designer"
+  | "foreman"
+  | "accountant"
+  | "worker"
+  | "client";
 
 export type LeadStatus =
   | "Новая заявка"
@@ -30,6 +38,9 @@ export type User = {
   name: string;
   email: string;
   role: Role;
+  phone?: string;
+  position?: string;
+  linkedCrewId?: string;
 };
 
 export type Client = {
@@ -124,6 +135,8 @@ export type ProjectFile = {
   type: string;
   visibleForClient: boolean;
   uploadedAt: string;
+  source?: "template" | "upload";
+  content?: string;
 };
 
 export type PhotoReport = {
@@ -166,6 +179,22 @@ export type Approval = {
   updatedAt: string;
 };
 
+export type ChatMessage = {
+  id: string;
+  projectId: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+};
+
+export type DocumentTemplate = {
+  id: string;
+  title: string;
+  type: string;
+  content: string;
+};
+
 export type DemoState = {
   users: User[];
   crew: CrewMember[];
@@ -179,6 +208,8 @@ export type DemoState = {
   payments: Payment[];
   materials: Material[];
   approvals: Approval[];
+  chatMessages: ChatMessage[];
+  documentTemplates: DocumentTemplate[];
 };
 
 export const leadStatuses: LeadStatus[] = [
@@ -223,11 +254,28 @@ export const workerTrades: WorkerTrade[] = [
 ];
 
 const users: User[] = [
-  { id: "u-admin", name: "Гульвира Бакытжанкызы", email: "admin@gulvira.kz", role: "admin" },
-  { id: "u-manager", name: "Алия Сапар", email: "manager@gulvira.kz", role: "manager" },
-  { id: "u-designer", name: "Диана Ермек", email: "designer@gulvira.kz", role: "designer" },
-  { id: "u-foreman", name: "Руслан Омар", email: "foreman@gulvira.kz", role: "foreman" },
-  { id: "u-accountant", name: "Мадина Нур", email: "accountant@gulvira.kz", role: "accountant" }
+  {
+    id: "u-director",
+    name: "Гульвира Бакытжанкызы",
+    email: "director@gulvira.kz",
+    role: "director",
+    phone: "+7 775 669 10 03",
+    position: "Директор"
+  },
+  { id: "u-admin", name: "Админ CRM", email: "admin@gulvira.kz", role: "admin", position: "Системный администратор" },
+  { id: "u-manager", name: "Алия Сапар", email: "manager@gulvira.kz", role: "manager", phone: "+7 701 440 10 02", position: "Менеджер проекта" },
+  { id: "u-designer", name: "Диана Ермек", email: "designer@gulvira.kz", role: "designer", phone: "+7 777 100 20 30", position: "Дизайнер" },
+  { id: "u-foreman", name: "Руслан Омар", email: "foreman@gulvira.kz", role: "foreman", phone: "+7 701 330 60 77", position: "Прораб" },
+  { id: "u-accountant", name: "Мадина Нур", email: "accountant@gulvira.kz", role: "accountant", phone: "+7 707 210 44 55", position: "Бухгалтер" },
+  {
+    id: "u-worker",
+    name: "Аскар Тлеуов",
+    email: "worker@gulvira.kz",
+    role: "worker",
+    phone: "+7 701 222 14 44",
+    position: "Электрик",
+    linkedCrewId: "crew-electric-askar"
+  }
 ];
 
 const crew: CrewMember[] = [
@@ -649,7 +697,9 @@ const files: ProjectFile[] = [
     title: "Договор Atilla",
     type: "Договор",
     visibleForClient: true,
-    uploadedAt: "2026-04-08"
+    uploadedAt: "2026-04-08",
+    source: "template",
+    content: "Договор подряда по проекту Atilla Barber Lounge."
   },
   {
     id: "f-2",
@@ -658,7 +708,9 @@ const files: ProjectFile[] = [
     title: "Планировка v3",
     type: "Планировки",
     visibleForClient: true,
-    uploadedAt: "2026-05-10"
+    uploadedAt: "2026-05-10",
+    source: "upload",
+    content: "Файл планировки загружен в демо-хранилище."
   },
   {
     id: "f-3",
@@ -666,7 +718,9 @@ const files: ProjectFile[] = [
     title: "Смета черновых работ",
     type: "Смета",
     visibleForClient: true,
-    uploadedAt: "2026-04-02"
+    uploadedAt: "2026-04-02",
+    source: "template",
+    content: "Смета черновых работ по разделам: материалы, работы, доставка."
   },
   {
     id: "f-4",
@@ -674,7 +728,9 @@ const files: ProjectFile[] = [
     title: "Внутренний акт проверки",
     type: "Акты",
     visibleForClient: false,
-    uploadedAt: "2026-05-28"
+    uploadedAt: "2026-05-28",
+    source: "upload",
+    content: "Внутренний акт проверки скрытых работ."
   }
 ];
 
@@ -777,6 +833,60 @@ const approvals: Approval[] = [
   }
 ];
 
+const chatMessages: ChatMessage[] = [
+  {
+    id: "msg-1",
+    projectId: "p-atilla",
+    authorId: "u-foreman",
+    authorName: "Руслан Омар",
+    body: "Электрики закончили щитовую, фото скрытых работ добавлены. Ждём проверку.",
+    createdAt: "2026-06-04T09:20:00"
+  },
+  {
+    id: "msg-2",
+    projectId: "p-atilla",
+    authorId: "u-manager",
+    authorName: "Алия Сапар",
+    body: "После проверки отправлю клиенту короткий отчёт и обновлю этап.",
+    createdAt: "2026-06-04T09:34:00"
+  },
+  {
+    id: "msg-3",
+    projectId: "p-kaitpas",
+    authorId: "u-accountant",
+    authorName: "Мадина Нур",
+    body: "По керамограниту нужен счёт от поставщика до оплаты.",
+    createdAt: "2026-06-04T11:05:00"
+  }
+];
+
+const documentTemplates: DocumentTemplate[] = [
+  {
+    id: "tpl-contract",
+    title: "Договор подряда",
+    type: "Договор",
+    content: "Договор подряда: заказчик, объект, сроки, стоимость, порядок оплат, ответственность сторон."
+  },
+  {
+    id: "tpl-estimate",
+    title: "Смета по этапу",
+    type: "Смета",
+    content: "Смета: этап, перечень работ, материалы, количество, цена, итог, маржа."
+  },
+  {
+    id: "tpl-act",
+    title: "Акт выполненных работ",
+    type: "Акты",
+    content: "Акт: проект, этап, выполненные работы, дата, ответственный, подписи."
+  },
+  {
+    id: "tpl-warranty",
+    title: "Гарантийный лист",
+    type: "Гарантийные документы",
+    content: "Гарантийный лист: объект, работы, срок гарантии, исключения, контакты сервиса."
+  }
+];
+
 export const seedState: DemoState = {
   users,
   crew,
@@ -789,7 +899,9 @@ export const seedState: DemoState = {
   photoReports,
   payments,
   materials,
-  approvals
+  approvals,
+  chatMessages,
+  documentTemplates
 };
 
 export function createDemoState(): DemoState {

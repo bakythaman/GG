@@ -3,11 +3,13 @@ create extension if not exists pgcrypto;
 create schema if not exists app;
 
 create type public.user_role as enum (
+  'director',
   'admin',
   'manager',
   'designer',
   'foreman',
   'accountant',
+  'worker',
   'client'
 );
 
@@ -46,6 +48,9 @@ create table public.users (
   name text not null,
   email text not null unique,
   role public.user_role not null,
+  phone text,
+  position text,
+  linked_crew_id uuid,
   created_at timestamptz not null default now()
 );
 
@@ -145,6 +150,8 @@ create table public.project_files (
   title text not null,
   file_type text not null,
   storage_path text,
+  source text not null default 'upload',
+  content text,
   visible_for_client boolean not null default false,
   uploaded_by uuid references public.users(id) on delete set null,
   created_at timestamptz not null default now()
@@ -215,6 +222,23 @@ create table public.approvals (
   created_at timestamptz not null default now()
 );
 
+create table public.chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  author_id uuid references public.users(id) on delete set null,
+  author_name text not null,
+  body text not null,
+  created_at timestamptz not null default now()
+);
+
+create table public.document_templates (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  file_type text not null,
+  content text not null,
+  created_at timestamptz not null default now()
+);
+
 create or replace function app.current_user_role()
 returns public.user_role
 language sql
@@ -256,7 +280,7 @@ security definer
 set search_path = public
 as $$
   select
-    app.current_user_role() = 'admin'
+    app.current_user_role() in ('director', 'admin')
     or (
       app.current_user_role() in ('manager', 'designer', 'foreman', 'accountant')
       and (
@@ -264,6 +288,16 @@ as $$
         or project_row.designer_id = app.current_user_id()
         or project_row.foreman_id = app.current_user_id()
         or app.current_user_role() = 'accountant'
+      )
+    )
+    or (
+      app.current_user_role() = 'worker'
+      and exists (
+        select 1
+        from public.tasks t
+        join public.users u on u.linked_crew_id = t.assignee_id
+        where t.project_id = project_row.id
+          and u.id = app.current_user_id()
       )
     )
     or (
@@ -286,63 +320,66 @@ alter table public.payments enable row level security;
 alter table public.materials enable row level security;
 alter table public.comments enable row level security;
 alter table public.approvals enable row level security;
+alter table public.chat_messages enable row level security;
+alter table public.document_templates enable row level security;
 
-create policy "admin users all" on public.users for all using (app.current_user_role() = 'admin') with check (app.current_user_role() = 'admin');
+create policy "admin users all" on public.users for all using (app.current_user_role() in ('director', 'admin')) with check (app.current_user_role() in ('director', 'admin'));
 create policy "own user read" on public.users for select using (auth_user_id = auth.uid());
+create policy "staff users read" on public.users for select using (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'accountant', 'worker'));
 
-create policy "staff clients read" on public.clients for select using (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman', 'accountant'));
+create policy "staff clients read" on public.clients for select using (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'accountant'));
 create policy "client own profile" on public.clients for select using (id = app.current_client_id());
-create policy "admin manager clients write" on public.clients for all using (app.current_user_role() in ('admin', 'manager')) with check (app.current_user_role() in ('admin', 'manager'));
+create policy "admin manager clients write" on public.clients for all using (app.current_user_role() in ('director', 'admin', 'manager')) with check (app.current_user_role() in ('director', 'admin', 'manager'));
 
-create policy "staff crew read" on public.crew_members for select using (app.current_user_role() in ('admin', 'manager', 'foreman', 'accountant'));
-create policy "admin manager foreman crew write" on public.crew_members for all using (app.current_user_role() in ('admin', 'manager', 'foreman')) with check (app.current_user_role() in ('admin', 'manager', 'foreman'));
+create policy "staff crew read" on public.crew_members for select using (app.current_user_role() in ('director', 'admin', 'manager', 'foreman', 'accountant', 'worker'));
+create policy "admin manager foreman crew write" on public.crew_members for all using (app.current_user_role() in ('director', 'admin', 'manager', 'foreman')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'foreman'));
 
-create policy "admin manager leads all" on public.leads for all using (app.current_user_role() in ('admin', 'manager')) with check (app.current_user_role() in ('admin', 'manager'));
+create policy "admin manager leads all" on public.leads for all using (app.current_user_role() in ('director', 'admin', 'manager')) with check (app.current_user_role() in ('director', 'admin', 'manager'));
 create policy "public lead insert" on public.leads for insert with check (true);
 
 create policy "projects scoped read" on public.projects for select using (app.can_access_project(projects));
-create policy "projects staff write" on public.projects for all using (app.current_user_role() in ('admin', 'manager')) with check (app.current_user_role() in ('admin', 'manager'));
+create policy "projects staff write" on public.projects for all using (app.current_user_role() in ('director', 'admin', 'manager')) with check (app.current_user_role() in ('director', 'admin', 'manager'));
 
 create policy "stages scoped read" on public.project_stages for select using (
   exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
   and (app.current_user_role() <> 'client' or visible_for_client)
 );
-create policy "stages staff write" on public.project_stages for all using (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman')) with check (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman'));
+create policy "stages staff write" on public.project_stages for all using (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman'));
 
 create policy "tasks staff scoped read" on public.tasks for select using (
-  app.current_user_role() in ('admin', 'manager', 'designer', 'foreman')
+  app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'worker')
   and exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
 );
-create policy "tasks staff write" on public.tasks for all using (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman')) with check (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman'));
+create policy "tasks staff write" on public.tasks for all using (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'worker')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'worker'));
 
 create policy "files scoped read" on public.project_files for select using (
   exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
   and (app.current_user_role() <> 'client' or visible_for_client)
 );
-create policy "files staff write" on public.project_files for all using (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman', 'accountant')) with check (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman', 'accountant'));
+create policy "files staff write" on public.project_files for all using (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'accountant')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'accountant'));
 
 create policy "reports scoped read" on public.photo_reports for select using (
   exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
   and (app.current_user_role() <> 'client' or visible_for_client)
 );
-create policy "reports staff write" on public.photo_reports for all using (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman')) with check (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman'));
+create policy "reports staff write" on public.photo_reports for all using (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman'));
 
 create policy "estimates scoped read" on public.estimates for select using (
   exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
   and (app.current_user_role() <> 'client' or visible_for_client)
 );
-create policy "estimates staff write" on public.estimates for all using (app.current_user_role() in ('admin', 'manager', 'accountant')) with check (app.current_user_role() in ('admin', 'manager', 'accountant'));
+create policy "estimates staff write" on public.estimates for all using (app.current_user_role() in ('director', 'admin', 'manager', 'accountant')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'accountant'));
 
 create policy "payments scoped read" on public.payments for select using (
   exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
 );
-create policy "payments finance write" on public.payments for all using (app.current_user_role() in ('admin', 'accountant')) with check (app.current_user_role() in ('admin', 'accountant'));
+create policy "payments finance write" on public.payments for all using (app.current_user_role() in ('director', 'admin', 'manager', 'accountant')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'accountant'));
 
 create policy "materials scoped read" on public.materials for select using (
   app.current_user_role() <> 'client'
   and exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
 );
-create policy "materials staff write" on public.materials for all using (app.current_user_role() in ('admin', 'manager', 'foreman', 'accountant')) with check (app.current_user_role() in ('admin', 'manager', 'foreman', 'accountant'));
+create policy "materials staff write" on public.materials for all using (app.current_user_role() in ('director', 'admin', 'manager', 'foreman', 'accountant')) with check (app.current_user_role() in ('director', 'admin', 'manager', 'foreman', 'accountant'));
 
 create policy "comments scoped read" on public.comments for select using (
   exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
@@ -360,17 +397,29 @@ create policy "approvals staff client update" on public.approvals for update usi
 ) with check (
   exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
 );
-create policy "approvals staff insert" on public.approvals for insert with check (app.current_user_role() in ('admin', 'manager', 'designer'));
+create policy "approvals staff insert" on public.approvals for insert with check (app.current_user_role() in ('director', 'admin', 'manager', 'designer'));
 
-insert into public.users (id, name, email, role) values
-  ('00000000-0000-0000-0000-000000000001', 'Гульвира Бакытжанкызы', 'admin@gulvira.kz', 'admin'),
-  ('00000000-0000-0000-0000-000000000002', 'Алия Сапар', 'manager@gulvira.kz', 'manager'),
-  ('00000000-0000-0000-0000-000000000003', 'Диана Ермек', 'designer@gulvira.kz', 'designer'),
-  ('00000000-0000-0000-0000-000000000004', 'Руслан Омар', 'foreman@gulvira.kz', 'foreman'),
-  ('00000000-0000-0000-0000-000000000005', 'Мадина Нур', 'accountant@gulvira.kz', 'accountant'),
-  ('00000000-0000-0000-0000-000000000006', 'Айдар Абилов', 'aidar@example.kz', 'client'),
-  ('00000000-0000-0000-0000-000000000007', 'Сауле Мухамед', 'saule@example.kz', 'client'),
-  ('00000000-0000-0000-0000-000000000008', 'Дана Орман', 'dana@example.kz', 'client')
+create policy "chat scoped read" on public.chat_messages for select using (
+  exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
+);
+create policy "chat scoped insert" on public.chat_messages for insert with check (
+  exists (select 1 from public.projects p where p.id = project_id and app.can_access_project(p))
+);
+
+create policy "templates staff read" on public.document_templates for select using (app.current_user_role() in ('director', 'admin', 'manager', 'designer', 'foreman', 'accountant'));
+create policy "templates admin write" on public.document_templates for all using (app.current_user_role() in ('director', 'admin', 'manager')) with check (app.current_user_role() in ('director', 'admin', 'manager'));
+
+insert into public.users (id, name, email, role, phone, position, linked_crew_id) values
+  ('00000000-0000-0000-0000-000000000001', 'Гульвира Бакытжанкызы', 'director@gulvira.kz', 'director', '+7 775 669 10 03', 'Директор', null),
+  ('00000000-0000-0000-0000-000000000009', 'Админ CRM', 'admin@gulvira.kz', 'admin', null, 'Системный администратор', null),
+  ('00000000-0000-0000-0000-000000000002', 'Алия Сапар', 'manager@gulvira.kz', 'manager', '+7 701 440 10 02', 'Менеджер проекта', null),
+  ('00000000-0000-0000-0000-000000000003', 'Диана Ермек', 'designer@gulvira.kz', 'designer', '+7 777 100 20 30', 'Дизайнер', null),
+  ('00000000-0000-0000-0000-000000000004', 'Руслан Омар', 'foreman@gulvira.kz', 'foreman', '+7 701 330 60 77', 'Прораб', null),
+  ('00000000-0000-0000-0000-000000000005', 'Мадина Нур', 'accountant@gulvira.kz', 'accountant', '+7 707 210 44 55', 'Бухгалтер', null),
+  ('00000000-0000-0000-0000-000000000010', 'Аскар Тлеуов', 'worker@gulvira.kz', 'worker', '+7 701 222 14 44', 'Электрик', '40000000-0000-0000-0000-000000000001'),
+  ('00000000-0000-0000-0000-000000000006', 'Айдар Абилов', 'aidar@example.kz', 'client', null, 'Клиент', null),
+  ('00000000-0000-0000-0000-000000000007', 'Сауле Мухамед', 'saule@example.kz', 'client', null, 'Клиент', null),
+  ('00000000-0000-0000-0000-000000000008', 'Дана Орман', 'dana@example.kz', 'client', null, 'Клиент', null)
 on conflict (id) do nothing;
 
 insert into public.clients (id, user_id, name, phone, whatsapp, email) values
@@ -417,10 +466,10 @@ insert into public.tasks (title, description, project_id, stage_id, responsible_
   ('Заказать керамогранит для Кайтпас', 'Сверить остатки у поставщика.', '20000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000007', 'снабженец', '2026-06-04', '2026-06-12', 'высокий', 'новая', 'закуп материалов'),
   ('Подготовить стены под плитку', 'Проверить геометрию и подготовить основание.', '20000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000003', 'плиточник', '2026-06-10', '2026-06-18', 'средний', 'новая', 'санузлы первого этажа');
 
-insert into public.project_files (project_id, stage_id, title, file_type, storage_path, visible_for_client, uploaded_by) values
-  ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', 'Договор Atilla', 'Договор', 'projects/atilla/contract.pdf', true, '00000000-0000-0000-0000-000000000002'),
-  ('20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003', 'Планировка v3', 'Планировки', 'projects/avalon/layout-v3.pdf', true, '00000000-0000-0000-0000-000000000003'),
-  ('20000000-0000-0000-0000-000000000003', null, 'Смета черновых работ', 'Смета', 'projects/kaitpas/estimate.pdf', true, '00000000-0000-0000-0000-000000000005');
+insert into public.project_files (project_id, stage_id, title, file_type, storage_path, source, content, visible_for_client, uploaded_by) values
+  ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', 'Договор Atilla', 'Договор', 'projects/atilla/contract.pdf', 'template', 'Договор подряда по проекту Atilla Barber Lounge.', true, '00000000-0000-0000-0000-000000000002'),
+  ('20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003', 'Планировка v3', 'Планировки', 'projects/avalon/layout-v3.pdf', 'upload', 'Файл планировки загружен в демо-хранилище.', true, '00000000-0000-0000-0000-000000000003'),
+  ('20000000-0000-0000-0000-000000000003', null, 'Смета черновых работ', 'Смета', 'projects/kaitpas/estimate.pdf', 'template', 'Смета черновых работ по разделам.', true, '00000000-0000-0000-0000-000000000005');
 
 insert into public.photo_reports (project_id, stage_id, image_path, description, report_date, author_id, visible_for_client) values
   ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', 'reports/atilla/electric.jpg', 'Черновая электрика готова к проверке.', '2026-06-02', '00000000-0000-0000-0000-000000000004', true),
@@ -442,3 +491,16 @@ insert into public.approvals (project_id, title, status, comment) values
   ('20000000-0000-0000-0000-000000000002', 'Планировка кухни-гостиной', 'ожидает', null),
   ('20000000-0000-0000-0000-000000000001', 'Палитра зоны ожидания', 'одобрено', 'Подтверждено клиентом.'),
   ('20000000-0000-0000-0000-000000000003', 'Смета черновых работ', 'ожидает', null);
+
+insert into public.chat_messages (id, project_id, author_id, author_name, body, created_at) values
+  ('90000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000004', 'Руслан Омар', 'Аскар, после проверки щитовой отправь фото скрытых линий сюда.', '2026-06-04 08:45:00+06'),
+  ('90000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000010', 'Аскар Тлеуов', 'Принял. Закончу проверку автоматов и загружу фото до обеда.', '2026-06-04 09:03:00+06'),
+  ('90000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002', 'Алия Сапар', 'По Кайтпасу сегодня фиксируем цену керамогранита и дату первой доставки.', '2026-06-04 09:25:00+06')
+on conflict (id) do nothing;
+
+insert into public.document_templates (id, title, file_type, content) values
+  ('91000000-0000-0000-0000-000000000001', 'Договор подряда', 'Договор', 'Договор подряда: заказчик, объект, этапы, сроки, ответственность сторон, порядок оплаты.'),
+  ('91000000-0000-0000-0000-000000000002', 'Акт выполненных работ', 'Акт', 'Акт выполненных работ: проект, этап, перечень работ, сумма, подписи заказчика и исполнителя.'),
+  ('91000000-0000-0000-0000-000000000003', 'Заявка на материалы', 'Заявка', 'Заявка на материалы: проект, позиция, количество, поставщик, цена, срок доставки, ответственный.'),
+  ('91000000-0000-0000-0000-000000000004', 'Смета этапа', 'Смета', 'Смета этапа: работы, материалы, исполнители, плановая сумма, фактическая сумма, комментарии.')
+on conflict (id) do nothing;
