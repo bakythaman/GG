@@ -27,6 +27,16 @@ create type public.lead_status as enum (
 create type public.stage_status as enum ('не начат', 'в работе', 'на проверке', 'завершён');
 create type public.task_status as enum ('новая', 'в работе', 'на проверке', 'завершена');
 create type public.priority_level as enum ('низкий', 'средний', 'высокий');
+create type public.worker_trade as enum (
+  'электрик',
+  'сантехник',
+  'плиточник',
+  'маляр',
+  'гипсокартонщик',
+  'мебельщик',
+  'снабженец',
+  'клинер'
+);
 create type public.material_status as enum ('нужно купить', 'заказано', 'доставлено', 'оплачено');
 create type public.approval_status as enum ('ожидает', 'одобрено', 'нужны правки', 'вопрос');
 
@@ -46,6 +56,17 @@ create table public.clients (
   phone text not null,
   whatsapp text,
   email text,
+  created_at timestamptz not null default now()
+);
+
+create table public.crew_members (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  trade public.worker_trade not null,
+  phone text not null,
+  city text not null,
+  rate_per_day numeric not null default 0,
+  status text not null default 'свободен',
   created_at timestamptz not null default now()
 );
 
@@ -107,9 +128,13 @@ create table public.tasks (
   project_id uuid not null references public.projects(id) on delete cascade,
   stage_id uuid references public.project_stages(id) on delete set null,
   responsible_id uuid references public.users(id) on delete set null,
+  assignee_id uuid references public.crew_members(id) on delete set null,
+  trade public.worker_trade,
+  start_date date,
   deadline date,
   priority public.priority_level not null default 'средний',
   status public.task_status not null default 'новая',
+  location text,
   created_at timestamptz not null default now()
 );
 
@@ -249,6 +274,7 @@ $$;
 
 alter table public.users enable row level security;
 alter table public.clients enable row level security;
+alter table public.crew_members enable row level security;
 alter table public.leads enable row level security;
 alter table public.projects enable row level security;
 alter table public.project_stages enable row level security;
@@ -267,6 +293,9 @@ create policy "own user read" on public.users for select using (auth_user_id = a
 create policy "staff clients read" on public.clients for select using (app.current_user_role() in ('admin', 'manager', 'designer', 'foreman', 'accountant'));
 create policy "client own profile" on public.clients for select using (id = app.current_client_id());
 create policy "admin manager clients write" on public.clients for all using (app.current_user_role() in ('admin', 'manager')) with check (app.current_user_role() in ('admin', 'manager'));
+
+create policy "staff crew read" on public.crew_members for select using (app.current_user_role() in ('admin', 'manager', 'foreman', 'accountant'));
+create policy "admin manager foreman crew write" on public.crew_members for all using (app.current_user_role() in ('admin', 'manager', 'foreman')) with check (app.current_user_role() in ('admin', 'manager', 'foreman'));
 
 create policy "admin manager leads all" on public.leads for all using (app.current_user_role() in ('admin', 'manager')) with check (app.current_user_role() in ('admin', 'manager'));
 create policy "public lead insert" on public.leads for insert with check (true);
@@ -350,6 +379,17 @@ insert into public.clients (id, user_id, name, phone, whatsapp, email) values
   ('10000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000008', 'Дана Орман', '+7 707 211 89 12', '+7 707 211 89 12', 'dana@example.kz')
 on conflict (id) do nothing;
 
+insert into public.crew_members (id, name, trade, phone, city, rate_per_day, status) values
+  ('40000000-0000-0000-0000-000000000001', 'Аскар Тлеуов', 'электрик', '+7 701 222 14 44', 'Шымкент', 42000, 'на объекте'),
+  ('40000000-0000-0000-0000-000000000002', 'Марат Исабек', 'сантехник', '+7 707 333 20 10', 'Шымкент', 45000, 'на объекте'),
+  ('40000000-0000-0000-0000-000000000003', 'Арман Касым', 'плиточник', '+7 747 900 81 12', 'Алматы', 50000, 'свободен'),
+  ('40000000-0000-0000-0000-000000000004', 'Самат Нурлан', 'маляр', '+7 775 120 77 19', 'Шымкент', 36000, 'на объекте'),
+  ('40000000-0000-0000-0000-000000000005', 'Руслан Бек', 'гипсокартонщик', '+7 701 515 91 40', 'Алматы', 39000, 'свободен'),
+  ('40000000-0000-0000-0000-000000000006', 'Анель Мебель Pro', 'мебельщик', '+7 702 778 45 00', 'Шымкент', 62000, 'свободен'),
+  ('40000000-0000-0000-0000-000000000007', 'Даурен Снабжение', 'снабженец', '+7 777 218 31 90', 'Шымкент', 30000, 'на объекте'),
+  ('40000000-0000-0000-0000-000000000008', 'Айгерим Clean', 'клинер', '+7 708 444 00 15', 'Алматы', 28000, 'свободен')
+on conflict (id) do nothing;
+
 insert into public.leads (name, phone, whatsapp, city, object_type, area, budget, source, comment, manager_id, status) values
   ('Нуржан', '+7 701 000 45 90', '+7 701 000 45 90', 'Шымкент', 'квартира', 82, 14500000, 'Instagram', 'Ремонт комфорт-класса в новостройке.', '00000000-0000-0000-0000-000000000002', 'Консультация'),
   ('Асем', '+7 707 880 10 10', '+7 707 880 10 10', 'Алматы', 'дом', 240, 52000000, 'Сайт', 'Архитектура и дизайн интерьера.', '00000000-0000-0000-0000-000000000002', 'Замер назначен'),
@@ -370,10 +410,12 @@ insert into public.project_stages (id, project_id, title, status, start_date, de
   ('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000003', 'Черновые работы', 'в работе', '2026-04-01', '2026-07-30', '00000000-0000-0000-0000-000000000004', 'Штукатурка, инженерные трассы, подготовка полов.', 56, true)
 on conflict (id) do nothing;
 
-insert into public.tasks (title, description, project_id, stage_id, responsible_id, deadline, priority, status) values
-  ('Проверить щитовую Atilla', 'Сверить группы автоматов с рабочими чертежами.', '20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000004', '2026-06-06', 'высокий', 'на проверке'),
-  ('Согласовать палитру ЖК Авалон', 'Подготовить две версии сочетаний.', '20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000003', '2026-06-09', 'средний', 'в работе'),
-  ('Заказать керамогранит для Кайтпас', 'Сверить остатки у поставщика.', '20000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000002', '2026-06-12', 'высокий', 'новая');
+insert into public.tasks (title, description, project_id, stage_id, responsible_id, assignee_id, trade, start_date, deadline, priority, status, location) values
+  ('Проверить щитовую Atilla', 'Сверить группы автоматов с рабочими чертежами.', '20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001', 'электрик', '2026-06-04', '2026-06-06', 'высокий', 'на проверке', 'щитовая и рабочие станции'),
+  ('Развести сантехнику в мокрой зоне', 'Вывести точки под мойку, бойлер и техническую раковину.', '20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000002', 'сантехник', '2026-06-05', '2026-06-08', 'высокий', 'в работе', 'мокрая зона персонала'),
+  ('Согласовать палитру ЖК Авалон', 'Подготовить две версии сочетаний.', '20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000004', 'маляр', '2026-06-07', '2026-06-09', 'средний', 'в работе', 'кухня-гостиная'),
+  ('Заказать керамогранит для Кайтпас', 'Сверить остатки у поставщика.', '20000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000007', 'снабженец', '2026-06-04', '2026-06-12', 'высокий', 'новая', 'закуп материалов'),
+  ('Подготовить стены под плитку', 'Проверить геометрию и подготовить основание.', '20000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000003', 'плиточник', '2026-06-10', '2026-06-18', 'средний', 'новая', 'санузлы первого этажа');
 
 insert into public.project_files (project_id, stage_id, title, file_type, storage_path, visible_for_client, uploaded_by) values
   ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', 'Договор Atilla', 'Договор', 'projects/atilla/contract.pdf', true, '00000000-0000-0000-0000-000000000002'),

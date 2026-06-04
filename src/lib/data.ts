@@ -15,6 +15,15 @@ export type LeadStatus =
 export type StageStatus = "не начат" | "в работе" | "на проверке" | "завершён";
 export type TaskStatus = "новая" | "в работе" | "на проверке" | "завершена";
 export type Priority = "низкий" | "средний" | "высокий";
+export type WorkerTrade =
+  | "электрик"
+  | "сантехник"
+  | "плиточник"
+  | "маляр"
+  | "гипсокартонщик"
+  | "мебельщик"
+  | "снабженец"
+  | "клинер";
 
 export type User = {
   id: string;
@@ -29,6 +38,16 @@ export type Client = {
   phone: string;
   whatsapp: string;
   email: string;
+};
+
+export type CrewMember = {
+  id: string;
+  name: string;
+  trade: WorkerTrade;
+  phone: string;
+  city: string;
+  ratePerDay: number;
+  status: "свободен" | "на объекте" | "выходной";
 };
 
 export type Lead = {
@@ -87,9 +106,13 @@ export type Task = {
   projectId: string;
   stageId: string;
   responsibleId: string;
+  assigneeId: string;
+  trade: WorkerTrade;
+  startDate: string;
   deadline: string;
   priority: Priority;
   status: TaskStatus;
+  location: string;
   comments: string[];
 };
 
@@ -145,6 +168,7 @@ export type Approval = {
 
 export type DemoState = {
   users: User[];
+  crew: CrewMember[];
   clients: Client[];
   leads: Lead[];
   projects: Project[];
@@ -187,12 +211,98 @@ export const stageNames = [
   "Сдача объекта"
 ];
 
+export const workerTrades: WorkerTrade[] = [
+  "электрик",
+  "сантехник",
+  "плиточник",
+  "маляр",
+  "гипсокартонщик",
+  "мебельщик",
+  "снабженец",
+  "клинер"
+];
+
 const users: User[] = [
   { id: "u-admin", name: "Гульвира Бакытжанкызы", email: "admin@gulvira.kz", role: "admin" },
   { id: "u-manager", name: "Алия Сапар", email: "manager@gulvira.kz", role: "manager" },
   { id: "u-designer", name: "Диана Ермек", email: "designer@gulvira.kz", role: "designer" },
   { id: "u-foreman", name: "Руслан Омар", email: "foreman@gulvira.kz", role: "foreman" },
   { id: "u-accountant", name: "Мадина Нур", email: "accountant@gulvira.kz", role: "accountant" }
+];
+
+const crew: CrewMember[] = [
+  {
+    id: "crew-electric-askar",
+    name: "Аскар Тлеуов",
+    trade: "электрик",
+    phone: "+7 701 222 14 44",
+    city: "Шымкент",
+    ratePerDay: 42000,
+    status: "на объекте"
+  },
+  {
+    id: "crew-plumber-marat",
+    name: "Марат Исабек",
+    trade: "сантехник",
+    phone: "+7 707 333 20 10",
+    city: "Шымкент",
+    ratePerDay: 45000,
+    status: "на объекте"
+  },
+  {
+    id: "crew-tile-arman",
+    name: "Арман Касым",
+    trade: "плиточник",
+    phone: "+7 747 900 81 12",
+    city: "Алматы",
+    ratePerDay: 50000,
+    status: "свободен"
+  },
+  {
+    id: "crew-painter-samat",
+    name: "Самат Нурлан",
+    trade: "маляр",
+    phone: "+7 775 120 77 19",
+    city: "Шымкент",
+    ratePerDay: 36000,
+    status: "на объекте"
+  },
+  {
+    id: "crew-drywall-ruslan",
+    name: "Руслан Бек",
+    trade: "гипсокартонщик",
+    phone: "+7 701 515 91 40",
+    city: "Алматы",
+    ratePerDay: 39000,
+    status: "свободен"
+  },
+  {
+    id: "crew-furniture-anel",
+    name: "Анель Мебель Pro",
+    trade: "мебельщик",
+    phone: "+7 702 778 45 00",
+    city: "Шымкент",
+    ratePerDay: 62000,
+    status: "свободен"
+  },
+  {
+    id: "crew-supply-dauren",
+    name: "Даурен Снабжение",
+    trade: "снабженец",
+    phone: "+7 777 218 31 90",
+    city: "Шымкент",
+    ratePerDay: 30000,
+    status: "на объекте"
+  },
+  {
+    id: "crew-clean-aigerim",
+    name: "Айгерим Clean",
+    trade: "клинер",
+    phone: "+7 708 444 00 15",
+    city: "Алматы",
+    ratePerDay: 28000,
+    status: "свободен"
+  }
 ];
 
 const clients: Client[] = [
@@ -362,10 +472,30 @@ const tasks: Task[] = [
     projectId: "p-atilla",
     stageId: "s-atilla-2",
     responsibleId: "u-foreman",
+    assigneeId: "crew-electric-askar",
+    trade: "электрик",
+    startDate: "2026-06-04",
     deadline: "2026-06-06",
     priority: "высокий",
     status: "на проверке",
+    location: "щитовая и рабочие станции",
     comments: ["Фото загружены, ждём финальную проверку дизайнера по подсветке."]
+  },
+  {
+    id: "t-1b",
+    title: "Развести сантехнику в мокрой зоне",
+    description: "Вывести точки под мойку, бойлер и техническую раковину, проверить уклоны.",
+    projectId: "p-atilla",
+    stageId: "s-atilla-2",
+    responsibleId: "u-foreman",
+    assigneeId: "crew-plumber-marat",
+    trade: "сантехник",
+    startDate: "2026-06-05",
+    deadline: "2026-06-08",
+    priority: "высокий",
+    status: "в работе",
+    location: "мокрая зона персонала",
+    comments: ["Материалы на объекте, нужны фото скрытых работ до закрытия."]
   },
   {
     id: "t-2",
@@ -374,9 +504,13 @@ const tasks: Task[] = [
     projectId: "p-avalon",
     stageId: "s-avalon-2",
     responsibleId: "u-designer",
+    assigneeId: "crew-painter-samat",
+    trade: "маляр",
+    startDate: "2026-06-07",
     deadline: "2026-06-09",
     priority: "средний",
     status: "в работе",
+    location: "кухня-гостиная",
     comments: []
   },
   {
@@ -386,10 +520,46 @@ const tasks: Task[] = [
     projectId: "p-kaitpas",
     stageId: "s-kaitpas-1",
     responsibleId: "u-manager",
+    assigneeId: "crew-supply-dauren",
+    trade: "снабженец",
+    startDate: "2026-06-04",
     deadline: "2026-06-12",
     priority: "высокий",
     status: "новая",
+    location: "закуп материалов",
     comments: ["Нужна привязка к смете после подтверждения цены."]
+  },
+  {
+    id: "t-4",
+    title: "Подготовить стены под плитку",
+    description: "Проверить геометрию, вывести плоскости и подготовить основание под санузлы.",
+    projectId: "p-kaitpas",
+    stageId: "s-kaitpas-1",
+    responsibleId: "u-foreman",
+    assigneeId: "crew-tile-arman",
+    trade: "плиточник",
+    startDate: "2026-06-10",
+    deadline: "2026-06-18",
+    priority: "средний",
+    status: "новая",
+    location: "санузлы первого этажа",
+    comments: []
+  },
+  {
+    id: "t-5",
+    title: "Собрать нишу под подсветку",
+    description: "Каркас, закладные и ревизионный доступ по рабочим чертежам.",
+    projectId: "p-avalon",
+    stageId: "s-avalon-2",
+    responsibleId: "u-foreman",
+    assigneeId: "crew-drywall-ruslan",
+    trade: "гипсокартонщик",
+    startDate: "2026-06-11",
+    deadline: "2026-06-16",
+    priority: "средний",
+    status: "новая",
+    location: "коридор и кухня-гостиная",
+    comments: []
   }
 ];
 
@@ -609,6 +779,7 @@ const approvals: Approval[] = [
 
 export const seedState: DemoState = {
   users,
+  crew,
   clients,
   leads,
   projects,

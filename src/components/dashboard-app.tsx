@@ -29,12 +29,16 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import {
   leadStatuses,
+  workerTrades,
+  type CrewMember,
   type LeadStatus,
   type Material,
   type Priority,
   type Role,
   type StageStatus,
-  type TaskStatus
+  type Task,
+  type TaskStatus,
+  type WorkerTrade
 } from "@/lib/data";
 import { useDemoState } from "@/lib/store";
 import { cn, formatCurrency, formatDate, percent } from "@/lib/utils";
@@ -45,6 +49,7 @@ type ModuleId =
   | "projects"
   | "stages"
   | "tasks"
+  | "crew"
   | "reports"
   | "documents"
   | "finance"
@@ -66,6 +71,7 @@ const modules: { id: ModuleId; label: string; icon: typeof LayoutDashboard; role
   { id: "projects", label: "Проекты", icon: BriefcaseBusiness, roles: ["admin", "manager", "designer", "foreman", "accountant"] },
   { id: "stages", label: "Этапы", icon: Workflow, roles: ["admin", "manager", "designer", "foreman"] },
   { id: "tasks", label: "Задачи", icon: ClipboardList, roles: ["admin", "manager", "designer", "foreman"] },
+  { id: "crew", label: "Исполнители", icon: Users, roles: ["admin", "manager", "foreman"] },
   { id: "reports", label: "Фотоотчёты", icon: ImagePlus, roles: ["admin", "manager", "designer", "foreman"] },
   { id: "documents", label: "Документы", icon: FileText, roles: ["admin", "manager", "designer", "foreman", "accountant"] },
   { id: "finance", label: "Финансы", icon: CircleDollarSign, roles: ["admin", "manager", "accountant"] },
@@ -96,6 +102,10 @@ export function DashboardApp() {
   const [projectSort, setProjectSort] = useState("progress");
   const [stageStatus, setStageStatus] = useState<"all" | StageStatus>("all");
   const [taskStatus, setTaskStatus] = useState<"all" | TaskStatus>("all");
+  const [taskProjectFilter, setTaskProjectFilter] = useState("all");
+  const [taskTradeFilter, setTaskTradeFilter] = useState<"all" | WorkerTrade>("all");
+  const [taskAssigneeFilter, setTaskAssigneeFilter] = useState("all");
+  const [taskQuery, setTaskQuery] = useState("");
   const [newLead, setNewLead] = useState({
     name: "",
     phone: "",
@@ -113,9 +123,13 @@ export function DashboardApp() {
     projectId: "p-atilla",
     stageId: "s-atilla-2",
     responsibleId: "u-foreman",
+    assigneeId: "crew-electric-askar",
+    trade: "электрик" as WorkerTrade,
+    startDate: "2026-06-04",
     deadline: "2026-06-15",
     priority: "средний" as Priority,
-    status: "новая" as TaskStatus
+    status: "новая" as TaskStatus,
+    location: ""
   });
   const [newReport, setNewReport] = useState({
     projectId: "p-atilla",
@@ -151,6 +165,7 @@ export function DashboardApp() {
   }, [active, visibleModules]);
 
   const userNameById = useMemo(() => new Map(state.users.map((user) => [user.id, user.name])), [state.users]);
+  const crewById = useMemo(() => new Map(state.crew.map((member) => [member.id, member])), [state.crew]);
   const clientById = useMemo(() => new Map(state.clients.map((client) => [client.id, client])), [state.clients]);
   const projectById = useMemo(() => new Map(state.projects.map((project) => [project.id, project])), [state.projects]);
   const stageById = useMemo(() => new Map(state.stages.map((stage) => [stage.id, stage])), [state.stages]);
@@ -185,16 +200,45 @@ export function DashboardApp() {
     .filter((task) => currentRole !== "foreman" || task.responsibleId === currentUser?.id)
     .filter((task) => taskStatus === "all" || task.status === taskStatus);
 
+  const filteredTasks = visibleTasks
+    .filter((task) => taskProjectFilter === "all" || task.projectId === taskProjectFilter)
+    .filter((task) => taskTradeFilter === "all" || task.trade === taskTradeFilter)
+    .filter((task) => taskAssigneeFilter === "all" || task.assigneeId === taskAssigneeFilter)
+    .filter((task) => {
+      const project = projectById.get(task.projectId)?.title ?? "";
+      const stage = stageById.get(task.stageId)?.title ?? "";
+      const assignee = crewById.get(task.assigneeId)?.name ?? "";
+      return `${task.title} ${task.description} ${task.location} ${project} ${stage} ${assignee} ${task.trade}`
+        .toLowerCase()
+        .includes(taskQuery.toLowerCase());
+    })
+    .sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime());
+
+  const taskStats = (() => {
+    const today = new Date("2026-06-04T00:00:00");
+    const weekEnd = new Date(today);
+    weekEnd.setDate(today.getDate() + 7);
+    return {
+      open: visibleTasks.filter((task) => task.status !== "завершена").length,
+      inProgress: visibleTasks.filter((task) => task.status === "в работе").length,
+      overdue: visibleTasks.filter((task) => new Date(`${task.deadline}T00:00:00`) < today && task.status !== "завершена").length,
+      week: visibleTasks.filter((task) => {
+        const deadline = new Date(`${task.deadline}T00:00:00`);
+        return deadline >= today && deadline <= weekEnd && task.status !== "завершена";
+      }).length
+    };
+  })();
+
   const filteredLeads = state.leads.filter((lead) =>
     `${lead.name} ${lead.phone} ${lead.city} ${lead.objectType}`.toLowerCase().includes(leadQuery.toLowerCase())
   );
 
-  const totals = useMemo(() => {
+  const totals = (() => {
     const budget = projectsForRole.reduce((sum, project) => sum + project.budget, 0);
     const paid = projectsForRole.reduce((sum, project) => sum + project.paid, 0);
     const overdueTasks = visibleTasks.filter((task) => new Date(task.deadline) < new Date() && task.status !== "завершена").length;
     return { budget, paid, debt: budget - paid, overdueTasks };
-  }, [projectsForRole, visibleTasks]);
+  })();
 
   function loginAs(role: Role) {
     if (role === "client") return;
@@ -218,7 +262,7 @@ export function DashboardApp() {
   function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     store.addTask(newTask);
-    setNewTask({ ...newTask, title: "", description: "" });
+    setNewTask({ ...newTask, title: "", description: "", location: "" });
   }
 
   function handleReportSubmit(event: FormEvent<HTMLFormElement>) {
@@ -365,7 +409,13 @@ export function DashboardApp() {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     {visibleTasks.slice(0, 5).map((task) => (
-                      <TaskLine key={task.id} task={task} projectTitle={projectById.get(task.projectId)?.title ?? ""} onDone={() => store.updateTaskStatus(task.id, "завершена")} />
+                      <TaskLine
+                        key={task.id}
+                        assignee={crewById.get(task.assigneeId)}
+                        task={task}
+                        projectTitle={projectById.get(task.projectId)?.title ?? ""}
+                        onDone={() => store.updateTaskStatus(task.id, "завершена")}
+                      />
                     ))}
                   </CardContent>
                 </Card>
@@ -551,9 +601,19 @@ export function DashboardApp() {
 
           {active === "tasks" && (
             <div className="mt-6 space-y-6">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Metric title="Открытые работы" value={taskStats.open.toString()} icon={ClipboardList} />
+                <Metric title="В работе" value={taskStats.inProgress.toString()} icon={Workflow} />
+                <Metric title="На этой неделе" value={taskStats.week.toString()} icon={CalendarClock} />
+                <Metric title="Просрочено" value={taskStats.overdue.toString()} icon={CalendarClock} tone="red" />
+              </div>
+
               <Card>
                 <CardHeader>
-                  <CardTitle>Новая задача</CardTitle>
+                  <CardTitle>Новая работа по проекту</CardTitle>
+                  <CardDescription>
+                    Укажите проект, этап, исполнителя, специализацию и дедлайн. После сохранения работа появится в журнале и Kanban.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={handleTaskSubmit} className="grid gap-4 lg:grid-cols-4">
@@ -561,13 +621,20 @@ export function DashboardApp() {
                       <Input required value={newTask.title} onChange={(event) => setNewTask({ ...newTask, title: event.target.value })} />
                     </Field>
                     <Field label="Проект">
-                      <Select value={newTask.projectId} onChange={(event) => setNewTask({ ...newTask, projectId: event.target.value })}>
+                      <Select
+                        value={newTask.projectId}
+                        onChange={(event) => {
+                          const projectId = event.target.value;
+                          const firstStage = state.stages.find((stage) => stage.projectId === projectId);
+                          setNewTask({ ...newTask, projectId, stageId: firstStage?.id ?? "" });
+                        }}
+                      >
                         {projectsForRole.map((project) => (
                           <option value={project.id} key={project.id}>{project.title}</option>
                         ))}
                       </Select>
                     </Field>
-                    <Field label="Ответственный">
+                    <Field label="Куратор">
                       <Select value={newTask.responsibleId} onChange={(event) => setNewTask({ ...newTask, responsibleId: event.target.value })}>
                         {state.users.map((user) => (
                           <option value={user.id} key={user.id}>{user.name}</option>
@@ -584,12 +651,44 @@ export function DashboardApp() {
                         ))}
                       </Select>
                     </Field>
+                    <Field label="Исполнитель">
+                      <Select
+                        value={newTask.assigneeId}
+                        onChange={(event) => {
+                          const assignee = crewById.get(event.target.value);
+                          setNewTask({
+                            ...newTask,
+                            assigneeId: event.target.value,
+                            trade: assignee?.trade ?? newTask.trade
+                          });
+                        }}
+                      >
+                        {state.crew.map((member) => (
+                          <option value={member.id} key={member.id}>
+                            {member.trade} · {member.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Специализация">
+                      <Select value={newTask.trade} onChange={(event) => setNewTask({ ...newTask, trade: event.target.value as WorkerTrade })}>
+                        {workerTrades.map((trade) => (
+                          <option key={trade}>{trade}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Начать">
+                      <Input type="date" value={newTask.startDate} onChange={(event) => setNewTask({ ...newTask, startDate: event.target.value })} />
+                    </Field>
                     <Field label="Приоритет">
                       <Select value={newTask.priority} onChange={(event) => setNewTask({ ...newTask, priority: event.target.value as Priority })}>
                         <option>низкий</option>
                         <option>средний</option>
                         <option>высокий</option>
                       </Select>
+                    </Field>
+                    <Field label="Зона работ">
+                      <Input value={newTask.location} onChange={(event) => setNewTask({ ...newTask, location: event.target.value })} placeholder="санузел, кухня, щитовая" />
                     </Field>
                     <Field label="Описание" className="lg:col-span-2">
                       <Input value={newTask.description} onChange={(event) => setNewTask({ ...newTask, description: event.target.value })} />
@@ -600,48 +699,153 @@ export function DashboardApp() {
                   </form>
                 </CardContent>
               </Card>
-              <div className="flex justify-between gap-3">
-                <Select className="max-w-xs" value={taskStatus} onChange={(event) => setTaskStatus(event.target.value as "all" | TaskStatus)}>
-                  <option value="all">Все задачи</option>
+
+              <div className="rounded-lg border border-graphite-100 bg-white p-4">
+                <div className="grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr]">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-graphite-400" />
+                    <Input className="pl-9" placeholder="Поиск по задаче, зоне, исполнителю" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} />
+                  </div>
+                  <Select value={taskProjectFilter} onChange={(event) => setTaskProjectFilter(event.target.value)}>
+                    <option value="all">Все проекты</option>
+                    {projectsForRole.map((project) => (
+                      <option value={project.id} key={project.id}>{project.title}</option>
+                    ))}
+                  </Select>
+                  <Select value={taskTradeFilter} onChange={(event) => setTaskTradeFilter(event.target.value as "all" | WorkerTrade)}>
+                    <option value="all">Все специализации</option>
+                    {workerTrades.map((trade) => (
+                      <option key={trade}>{trade}</option>
+                    ))}
+                  </Select>
+                  <Select value={taskAssigneeFilter} onChange={(event) => setTaskAssigneeFilter(event.target.value)}>
+                    <option value="all">Все исполнители</option>
+                    {state.crew.map((member) => (
+                      <option value={member.id} key={member.id}>{member.name}</option>
+                    ))}
+                  </Select>
+                  <Select value={taskStatus} onChange={(event) => setTaskStatus(event.target.value as "all" | TaskStatus)}>
+                    <option value="all">Все статусы</option>
                   <option>новая</option>
                   <option>в работе</option>
                   <option>на проверке</option>
                   <option>завершена</option>
-                </Select>
-                <Badge tone="gold">{visibleTasks.length} задач</Badge>
+                  </Select>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Badge tone="gold">{filteredTasks.length} работ найдено</Badge>
+                  {taskStats.overdue > 0 && <Badge tone="red">{taskStats.overdue} просрочено</Badge>}
+                </div>
               </div>
-              <div className="grid gap-4 lg:grid-cols-2">
-                {visibleTasks.map((task) => (
-                  <Card key={task.id}>
-                    <CardHeader>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <CardTitle>{task.title}</CardTitle>
-                          <CardDescription>{projectById.get(task.projectId)?.title} · {stageById.get(task.stageId)?.title}</CardDescription>
+
+              <div className="grid gap-4 xl:grid-cols-4">
+                {(["новая", "в работе", "на проверке", "завершена"] as TaskStatus[]).map((status) => {
+                  const columnTasks = filteredTasks.filter((task) => task.status === status);
+                  return (
+                    <div key={status} className="rounded-lg border border-graphite-100 bg-white p-3">
+                      <div className="mb-3 flex items-center justify-between">
+                        <h3 className="text-sm font-semibold text-graphite-900">{status}</h3>
+                        <Badge>{columnTasks.length}</Badge>
+                      </div>
+                      <div className="space-y-3">
+                        {columnTasks.map((task) => (
+                          <TaskCard
+                            key={task.id}
+                            assignee={crewById.get(task.assigneeId)}
+                            curator={userNameById.get(task.responsibleId) ?? ""}
+                            projectTitle={projectById.get(task.projectId)?.title ?? ""}
+                            stageTitle={stageById.get(task.stageId)?.title ?? ""}
+                            task={task}
+                            crew={state.crew}
+                            onAssigneeChange={(member) => store.updateTaskAssignee(task.id, member.id, member.trade)}
+                            onStatusChange={(nextStatus) => store.updateTaskStatus(task.id, nextStatus)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Работы по проектам</CardTitle>
+                  <CardDescription>Краткая сводка: что делается на каждом объекте, кто исполнитель и когда дедлайн.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {projectsForRole.map((project) => (
+                    <ProjectWorkPanel
+                      key={project.id}
+                      crewById={crewById}
+                      projectTitle={project.title}
+                      tasks={visibleTasks.filter((task) => task.projectId === project.id)}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {active === "crew" && (
+            <div className="mt-6 space-y-6">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Metric title="Исполнители" value={state.crew.length.toString()} icon={Users} />
+                <Metric title="На объекте" value={state.crew.filter((member) => member.status === "на объекте").length.toString()} icon={Workflow} />
+                <Metric title="Свободны" value={state.crew.filter((member) => member.status === "свободен").length.toString()} icon={Check} />
+                <Metric title="Просрочки у бригад" value={taskStats.overdue.toString()} icon={CalendarClock} tone="red" />
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-2">
+                {state.crew.map((member) => {
+                  const memberTasks = visibleTasks.filter((task) => task.assigneeId === member.id);
+                  const openTasks = memberTasks.filter((task) => task.status !== "завершена");
+                  const overdue = openTasks.filter((task) => new Date(`${task.deadline}T00:00:00`) < new Date("2026-06-04T00:00:00"));
+                  return (
+                    <Card key={member.id}>
+                      <CardHeader>
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div>
+                            <CardTitle>{member.name}</CardTitle>
+                            <CardDescription>{member.trade} · {member.phone} · {formatCurrency(member.ratePerDay)} / день</CardDescription>
+                          </div>
+                          <Badge tone={member.status === "на объекте" ? "green" : "neutral"}>{member.status}</Badge>
                         </div>
-                        <Badge tone={task.priority === "высокий" ? "red" : "neutral"}>{task.priority}</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <p className="text-sm text-graphite-500">{task.description}</p>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        <Info label="Ответственный" value={userNameById.get(task.responsibleId) ?? ""} />
-                        <Info label="Дедлайн" value={formatDate(task.deadline)} />
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Select className="max-w-48" value={task.status} onChange={(event) => store.updateTaskStatus(task.id, event.target.value as TaskStatus)}>
-                          <option>новая</option>
-                          <option>в работе</option>
-                          <option>на проверке</option>
-                          <option>завершена</option>
-                        </Select>
-                        <Button size="sm" variant="gold" onClick={() => store.updateTaskStatus(task.id, "завершена")}>
-                          Завершить
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                          <div className="rounded-md bg-graphite-50 p-3">
+                            <p className="text-xs text-graphite-500">Всего</p>
+                            <p className="font-semibold">{memberTasks.length}</p>
+                          </div>
+                          <div className="rounded-md bg-graphite-50 p-3">
+                            <p className="text-xs text-graphite-500">Открыто</p>
+                            <p className="font-semibold">{openTasks.length}</p>
+                          </div>
+                          <div className="rounded-md bg-clay/10 p-3">
+                            <p className="text-xs text-clay">Просрочено</p>
+                            <p className="font-semibold text-clay">{overdue.length}</p>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {openTasks.slice(0, 4).map((task) => (
+                            <div key={task.id} className="rounded-md border border-graphite-100 p-3 text-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-semibold text-graphite-900">{task.title}</p>
+                                  <p className="text-xs text-graphite-500">
+                                    {projectById.get(task.projectId)?.title} · {task.location}
+                                  </p>
+                                </div>
+                                <DeadlineBadge deadline={task.deadline} status={task.status} />
+                              </div>
+                            </div>
+                          ))}
+                          {!openTasks.length && <p className="text-sm text-graphite-500">Открытых работ нет.</p>}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -898,16 +1102,170 @@ function ProjectRow({ project, client }: { project: { title: string; progress: n
   );
 }
 
-function TaskLine({ task, projectTitle, onDone }: { task: { title: string; deadline: string; priority: Priority }; projectTitle: string; onDone: () => void }) {
+function TaskLine({
+  task,
+  projectTitle,
+  assignee,
+  onDone
+}: {
+  task: { title: string; deadline: string; priority: Priority; trade: WorkerTrade };
+  projectTitle: string;
+  assignee?: CrewMember;
+  onDone: () => void;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-graphite-100 p-3">
       <div>
         <p className="text-sm font-semibold text-graphite-900">{task.title}</p>
-        <p className="text-xs text-graphite-500">{projectTitle} · {formatDate(task.deadline)}</p>
+        <p className="text-xs text-graphite-500">
+          {projectTitle} · {assignee?.name ?? task.trade} · {formatDate(task.deadline)}
+        </p>
       </div>
       <Button size="sm" variant="outline" onClick={onDone}>Готово</Button>
     </div>
   );
+}
+
+function TaskCard({
+  task,
+  projectTitle,
+  stageTitle,
+  curator,
+  assignee,
+  crew,
+  onStatusChange,
+  onAssigneeChange
+}: {
+  task: Task;
+  projectTitle: string;
+  stageTitle: string;
+  curator: string;
+  assignee?: CrewMember;
+  crew: CrewMember[];
+  onStatusChange: (status: TaskStatus) => void;
+  onAssigneeChange: (member: CrewMember) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-graphite-100 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-semibold text-graphite-900">{task.title}</p>
+          <p className="mt-1 text-xs text-graphite-500">{projectTitle} · {stageTitle}</p>
+        </div>
+        <Badge tone={task.priority === "высокий" ? "red" : "neutral"}>{task.priority}</Badge>
+      </div>
+
+      <p className="mt-3 text-sm leading-6 text-graphite-600">{task.description || "Описание не добавлено."}</p>
+
+      <div className="mt-4 grid gap-2 text-sm">
+        <Info label="Исполнитель" value={assignee ? `${assignee.name} · ${assignee.trade}` : task.trade} />
+        <Info label="Телефон" value={assignee?.phone ?? "не указан"} />
+        <Info label="Куратор" value={curator} />
+        <Info label="Зона" value={task.location || "объект"} />
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <DeadlineBadge deadline={task.deadline} status={task.status} />
+        <Badge tone="gold">старт {formatDate(task.startDate)}</Badge>
+      </div>
+
+      <div className="mt-4 grid gap-2">
+        <Select value={task.status} onChange={(event) => onStatusChange(event.target.value as TaskStatus)}>
+          <option>новая</option>
+          <option>в работе</option>
+          <option>на проверке</option>
+          <option>завершена</option>
+        </Select>
+        <Select
+          value={task.assigneeId}
+          onChange={(event) => {
+            const member = crew.find((item) => item.id === event.target.value);
+            if (member) onAssigneeChange(member);
+          }}
+        >
+          {crew.map((member) => (
+            <option value={member.id} key={member.id}>
+              {member.trade} · {member.name}
+            </option>
+          ))}
+        </Select>
+        {task.status !== "завершена" && (
+          <Button size="sm" variant="gold" onClick={() => onStatusChange("завершена")}>
+            Завершить работу
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProjectWorkPanel({
+  projectTitle,
+  tasks,
+  crewById
+}: {
+  projectTitle: string;
+  tasks: Task[];
+  crewById: Map<string, CrewMember>;
+}) {
+  const openTasks = tasks.filter((task) => task.status !== "завершена");
+  const progress = tasks.length ? percent(tasks.filter((task) => task.status === "завершена").length, tasks.length) : 0;
+
+  return (
+    <div className="rounded-lg border border-graphite-100 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="font-semibold text-graphite-900">{projectTitle}</p>
+          <p className="text-sm text-graphite-500">{openTasks.length} открытых работ</p>
+        </div>
+        <Badge tone="gold">{progress}% закрыто</Badge>
+      </div>
+      <Progress value={progress} className="mt-3" />
+      <div className="mt-4 grid gap-2 lg:grid-cols-2">
+        {openTasks.slice(0, 6).map((task) => {
+          const assignee = crewById.get(task.assigneeId);
+          return (
+            <div key={task.id} className="rounded-md bg-graphite-50 p-3 text-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-graphite-900">{task.title}</p>
+                  <p className="text-xs text-graphite-500">
+                    {assignee?.trade ?? task.trade} · {assignee?.name ?? "исполнитель не назначен"}
+                  </p>
+                </div>
+                <DeadlineBadge deadline={task.deadline} status={task.status} />
+              </div>
+            </div>
+          );
+        })}
+        {!openTasks.length && <p className="text-sm text-graphite-500">Все работы по проекту закрыты.</p>}
+      </div>
+    </div>
+  );
+}
+
+function DeadlineBadge({ deadline, status }: { deadline: string; status: TaskStatus }) {
+  const today = new Date("2026-06-04T00:00:00");
+  const dueDate = new Date(`${deadline}T00:00:00`);
+  const diffDays = Math.ceil((dueDate.getTime() - today.getTime()) / 86400000);
+
+  if (status === "завершена") {
+    return <Badge tone="green">готово {formatDate(deadline)}</Badge>;
+  }
+
+  if (diffDays < 0) {
+    return <Badge tone="red">просрочено {Math.abs(diffDays)} дн.</Badge>;
+  }
+
+  if (diffDays === 0) {
+    return <Badge tone="gold">сегодня</Badge>;
+  }
+
+  if (diffDays <= 2) {
+    return <Badge tone="gold">через {diffDays} дн.</Badge>;
+  }
+
+  return <Badge>{formatDate(deadline)}</Badge>;
 }
 
 function FilterBar({

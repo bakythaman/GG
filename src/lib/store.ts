@@ -11,11 +11,12 @@ import {
   type PhotoReport,
   type ProjectFile,
   type Task,
-  type TaskStatus
+  type TaskStatus,
+  type WorkerTrade
 } from "@/lib/data";
 import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
 
-const STORAGE_KEY = "gulvira-group-demo-state-v1";
+const STORAGE_KEY = "gulvira-group-demo-state-v2";
 
 function makeId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -30,7 +31,24 @@ function loadState() {
   if (!raw) return createDemoState();
 
   try {
-    return JSON.parse(raw) as DemoState;
+    const parsed = JSON.parse(raw) as DemoState;
+    const seed = createDemoState();
+    return {
+      ...seed,
+      ...parsed,
+      crew: parsed.crew?.length ? parsed.crew : seed.crew,
+      tasks: (parsed.tasks?.length ? parsed.tasks : seed.tasks).map((task) => {
+        const seedTask = seed.tasks.find((item) => item.id === task.id);
+        const assignee = seed.crew.find((member) => member.id === (task as Task).assigneeId) ?? seed.crew[0];
+        return {
+          ...task,
+          assigneeId: (task as Task).assigneeId ?? seedTask?.assigneeId ?? assignee.id,
+          trade: (task as Task).trade ?? seedTask?.trade ?? assignee.trade,
+          startDate: (task as Task).startDate ?? seedTask?.startDate ?? new Date().toISOString().slice(0, 10),
+          location: (task as Task).location ?? seedTask?.location ?? "объект"
+        };
+      })
+    };
   } catch {
     return createDemoState();
   }
@@ -103,6 +121,14 @@ export function useDemoState() {
         setState((current) => ({
           ...current,
           tasks: current.tasks.map((task) => (task.id === taskId ? { ...task, status } : task))
+        }));
+      },
+      updateTaskAssignee: (taskId: string, assigneeId: string, trade: WorkerTrade) => {
+        setState((current) => ({
+          ...current,
+          tasks: current.tasks.map((task) =>
+            task.id === taskId ? { ...task, assigneeId, trade } : task
+          )
         }));
       },
       addPhotoReport: (report: Omit<PhotoReport, "id" | "date" | "authorId">) => {
